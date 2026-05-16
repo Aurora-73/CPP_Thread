@@ -4,7 +4,7 @@
             "name": "Win64",
             "compilerPath": "D:/mingw64/bin/g++.exe",
             "intelliSenseMode": "windows-gcc-x64",
-            "cStandard": "c11",
+            "cStandard": "c17",
             "cppStandard": "c++17",
             "includePath": [
                 "${workspaceFolder}/**",

@@ -7,3 +7,5 @@ autogit.bat
 CMakeLists.txt
 *.out
 .history
+test.cpp
+install.sh

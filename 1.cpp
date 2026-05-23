@@ -22,9 +22,8 @@ std::thread 表示一个执行线程，可用于并发执行函数。
     join：等待线程执行结束
     detach：线程独立运行，thread 对象失去控制权
 
-    注意：
-        若 std::thread 析构时joinable() == true，会调用 std::terminate 终止程序
-        因此析构前必须 join 或 detach
+    若 std::thread 析构时joinable() == true，会调用 std::terminate 终止程序
+    C++20 可以使用std::jthread实现析构时自动join，此外还支持stop_token作为停止请求信号。
 
 this_thread::sleep_for： 当前线程休眠指定时长
 this_thread::sleep_until： 当前线程休眠到指定时间点

@@ -5,152 +5,155 @@
 #include <iostream>
 #include <mutex>
 #include <queue>
+#include <shared_mutex>
 #include <thread>
 #include <vector>
 
-// 生产者消费者问题（Producer-consumer problem，也称有限缓冲问题）是多线程同步问题的经典案例。该问题描述了两个共享固定大小缓冲区的线程——生产者与消费者在实际运行时的协同问题。生产者负责生成数据存入缓冲区，消费者则从缓冲区取出数据消耗。解决方案需通过记录型信号量确保：当缓冲区满时生产者停止写入，缓冲区空时消费者停止读取，从而实现线程间安全通信。
-
+// 条件变量，是一种同步原语，允许多个线程相互通信。它允许一定数量的线程等待（可能带超时）来自另一个线程的通知，表明它们可以继续。条件变量总是与互斥体关联。在头文件 <condition_variable> 中定义
 /*
-生产者消费者问题：
-    1、生产者在线程私有区并行地准备任务，在临界区内串行地把任务放入共享队列；
-        消费者在线界区内串行地从共享队列取任务，在临界区外并行地处理任务。
+condition_variable(类) 提供与 std::unique_lock 关联的条件变量
+    只有默认的无参构造，不支持拷贝和移动
 
-    2、这里使用两个 condition_variable，分别对应两类等待谓词：
-        - 生产者等待“队列未满”或“系统已停止继续生产”；
-        - 消费者等待“队列非空”或“所有生产者都已退出”。
-        condition_variable 本身不保存条件，真正的条件来自受保护的共享状态。
+    __condvar _M_cond; 
+        核心成员变量，是底层真正的条件变量对象，通常映射到操作系统的线程同步原语：
+        Linux / POSIX 系统用 pthread_cond_t，Windows 系统用 CONDITION_VARIABLE，它负责维护等待线程队列。
 
-    3、任务队列以及与之相关的同步状态需要互斥访问，因此使用同一把 mutex
-        保护它们，并让 wait(lock, pred) 在“检查条件”和“进入等待”之间保持原子语义。
-        这样可以避免因为竞态导致线程错过状态变化。
-        这里被共同保护的状态包括：
-        - tasks_
-        - 与队列等待/退出相关的状态判断
+    void wait(unique_lock<mutex>& __lock);
+        wait 的执行过程是原子性的 { 调用 __lock.unlock()，把当前线程挂到 _M_cond 的等待队列，阻塞线程 } ，不会在解锁和进入等待之间出现中间状态（这是 CV 存在的核心理由）。
+        （让操作系统调度其他线程解除阻塞，其他线程调用notify_*() 会使至少一个/所有等待线程变为“可运行状态”（ready）)
+        当解除阻塞时，调用 __lock.lock()（可能会在该锁上阻塞），然后wait函数返回，线程继续执行
+        __lock 的释放和再次获取是waith函数自动管理的，线程会在函数返回前抢到锁，抢不到就在锁上阻塞。
 
-    4、退出分两步：
-        - main 线程先设置 stop_produce，表示不再接收新的生产任务；
-        - 各生产者陆续退出，最后一个生产者退出时唤醒所有消费者；
-        - 消费者会继续处理队列中剩余的任务，直到发现“所有生产者都已退出且队列为空”后再结束。
-        因此，系统能正确退出，不是因为 notify 次数多于任务数，
-        而是因为消费者的等待谓词同时覆盖了“还有任务可做”和“不会再有新任务”这两种情况。
-    
-    6、wait 必须放在循环/谓词检查里，而不能假设“被唤醒就一定条件成立”，因为条件变量可能出现虚假唤醒。
-       即cv.wait(lk, prod) 或 while(!prod) cv.wait()
+    void wait(unique_lock<mutex>& __lock, _Predicate __p) {	while (!__p()) wait(__lock); };
+        这是标准实现方式：循环检查 predicate，因为即使线程被唤醒，也可能是“虚假唤醒”（spurious wakeup），所以标准要求必须循环判断条件，确保安全。
+        condition_variable 不保存状态，它只负责“通知变化发生过”，维护挂起队列
+
+    void notify_one() noexcept { _M_cond.notify_one(); }
+    void notify_all() noexcept { _M_cond.notify_all(); }
+        调用底层操作系统的条件变量接口：
+            notify_one() 唤醒等待队列里的一个线程，
+            notify_all() 唤醒所有等待线程（但是这些线程间由于需要竞争锁还是只能串行执行）
+        注意：唤醒并不意味着线程立即执行，它们还必须抢占 mutex 才能继续。
+        通知线程不需要持有与等待线程所持有的相同互斥锁。实际上这样做可能会是一种性能下降，因为被通知的线程会由于未持有锁而立即再次阻塞，等待通知线程释放锁。
+
+    std::cv_status wait_for( std::unique_lock<std::mutex>& lock, const std::chrono::duration& rel_time ); (1)
+    bool wait_for( std::unique_lock<std::mutex>& lock, const std::chrono::duration& rel_time, Predicate pred ); (2)
+    std::cv_status wait_until( std::unique_lock<std::mutex>& lock, const std::chrono::time_point<Clock, Duration>& abs_time ); (1)
+    bool wait_until( std::unique_lock<std::mutex>& lock, const std::chrono::time_point<Clock, Duration>& abs_time, Predicate pred ); (2)
+    在wait的基础上，如果已到达等待时间限制或已到达等待时间点则唤醒
+    返回值
+        (1) 如果达到 abs_time，则返回 std::cv_status::timeout，否则返回 std::cv_status::no_timeout。
+        (2) 在返回给调用者之前，pred() 的最新结果。
+
+    unique_lock<mutex> 与 condition_variable 的关系：
+        mutex：保护条件状态（你的 val、队列等）
+        condition_variable：管理阻塞等待的线程队列
+        协作方式：
+            先 lock(mutex) （手动，一般用 unique_lock<mutex> lk(mtx);），然后检查条件
+            如果条件不满足，wait(lk) → 自动解锁并挂起，其他线程修改条件，通知线程唤醒 notify_*()
+            被唤醒线程重新获取 mutex，继续检查条件（while (!__p()) 避免虚假唤醒 ）
+            所以 mutex 并不是 condition_variable 的一部分，它只保证条件的互斥访问。
+            条件变量的规范要求：所有等待同一个 condition_variable 的线程必须在等待前持有同一把互斥锁，并且 wait() 会自动解锁这把互斥锁，然后阻塞。
+
+condition_variable_any(类) 提供与任意锁类型关联的条件变量
+    只有默认的无参构造，不支持拷贝和移动
+    condition_variable_any 的 wait 函数是一个模版函数，支持 BasicLockable 的锁，比如 shared_lock 等
+    std::condition_variable_any 可以与 std::shared_lock 一起使用，以在共享所有权模式下等待 std::shared_mutex。
+    std::condition_variable_any 与自定义 Lockable 类型的可能用途是提供方便的、可中断的等待：自定义锁操作将按预期锁定关联的互斥体，并执行必要的设置以在收到中断信号时通知此条件变量。
+
+    bool wait( Lock& lock, std::stop_token stoken, Predicate pred );
+        (C++20) 解决传统 CV 没有“外部取消机制”stop_token = “额外唤醒源 + 退出条件” 的问题，允许等待中的线程可以被“主动取消”
+
+notify_all_at_thread_exit(函数) 调度在当前线程完全结束后调用 notify_all
+    void notify_all_at_thread_exit( std::condition_variable& cond, std::unique_lock<std::mutex> lk );
+    用于通知其他线程给定线程已完全完成，包括销毁所有 thread_local 对象。它保证了通知将在线程对象被销毁、本地变量被清理、std::thread 内部状态被更新之后，但在操作系统线程实际终止之前发生。
+    与线程函数最后执行lk.unlock(); cv.notify_all(); 的区别在于notify_all_at_thread_exit是在 thread_local 对象销毁后进行的通知，而普通情况下 thread_local 的析构发生在线程函数最后一条语句执行结束后。
+
+cv_status(枚举类) 列出条件变量上带超时等待的可能结果 { timeout, no_timeout}
+
+虚假唤醒（Spurious Wakeup）：
+    线程从 cv.wait(lk) 被唤醒，但并没有真正收到 notify，条件可能仍然不满足。
+    不是 notify 触发的，条件仍然可能为 false，必须循环检查条件来保证正确性
+    这是由于 操作系统调度或者底层实现机制（如 pthreads）可能无缘无故唤醒等待队列里的线程
+    这是合法的行为，不是 bug，需要循环检查条件解决这个问题
+
+丢失唤醒（Lost Wakeup）：
+    线程在等待条件前或条件发生时，没有收到通知，导致线程永远被阻塞。
+    notify 发出的时候，没有线程在等待，但是这时已经有线程判定条件不通过准备阻塞了，也就是没有互斥的访问条件；或者在获取锁和挂起线程之间发生竞争，信号被“丢掉”
+    防止方式：
+        必须用 mutex 保护条件，保证 wait 之前的条件判断和 notify之前的条件修改 互斥进行，一起使用同一把锁
+
+    每个condition_variable对象cv底层绑定了一个等待线程队列（没有绑定判断条件本身）
+    当有线程调用wait函数时，将这个线程挂起到等待线程队列中
+    当有线程调用notify函数时，将挂起队列中的线程唤醒
+    为了避免lost wakeup（丢失唤醒），即wait线程先等待条件发生，在阻塞之前调度到notify线程发出信号，然后wait线程才阻塞，唤醒通知发出在线程调用wait之前发生，导致wait线程错过唤醒永久睡死
+    需要保证阻塞信号的访问和修改是互斥的，因此需要使用unique_lock保护线程。
+    先获取锁，保证信号量中的条件的判断和修改是互斥的，然后如果条件不满足，释放锁，阻塞当前线程，挂起到挂起队列中
+    当另一个线程需要唤醒别的线程时，先获取同一个mutex，保证互斥修改，然后修改判断条件，调用notify唤醒别的线程。
+    线程被唤醒后会获取锁，这保证了阻塞队列中最多有一个线程被唤醒。当前线程在被 cv.wait(lk) 唤醒时，一定会重新获取 mtx。
+    cv.notify_all() 唤醒所有等待线程，但每个线程仍然必须抢 mutex；mutex 的阻塞队列保证每个线程最终能继续执行，因此不会有线程“卡死”，只是按顺序进入临界区。
 */
 
-constexpr int max_size = 5;
+using namespace std;
 
-std::queue<std::string> tasks;
-std::atomic<int> task_id = 0;
-std::atomic<bool> stop_produce = false; // 只用停生产者，消费者自己判断什么时候停止
-std::atomic<int> active_producers = 0;  // 用于辅助消费者停止
-std::mutex mtx;                         // 保护任务队列
-std::condition_variable cv_not_full;    // 变量 (tasks 未满) 的挂起队列
-std::condition_variable cv_not_empty;   // 变量 (tasks 非空) 的挂起队列
+mutex mtx;
+bool pred;
+condition_variable cv;
 
-void producer(int i) {
-	while(!stop_produce.load()) {
-		int tid;
-		{
-			std::cout << std::format("[producer] {} 准备数据", i) << std::endl;
-			std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 模拟数据准备
-			tid = ++task_id;                                           // 模拟数据准备
-		} // 并行区，生产者准备任务内容
-
-		{
-			std::unique_lock<std::mutex> lk(mtx);
-			cv_not_full.wait(
-			    lk, []() { return tasks.size() < max_size || stop_produce.load(); }); // 注意停止判断也要放在 cv 里
-
-			// 停止生产后，不再把新准备的任务放入队列，避免停机时继续扩张任务量。
-			if(stop_produce.load()) {
-				break;
-			}
-
-			std::cout << std::format("[producer] {} 挂载任务", i) << std::endl;
-			tasks.emplace(std::format("[task] {}", tid));
-			lk.unlock(); // 先解锁后 notify_one 减少虚假唤醒
-			cv_not_empty.notify_one();
-		} // 串行区，生产者挂载任务
-	}
-
-	// 最后一个生产者负责广播“不会再有新任务”，让消费者在清空队列后退出。
-	if(active_producers.fetch_sub(1) == 1) {
-		cv_not_empty.notify_all();
-	}
-	std::cout << std::format("[producer] {} exit", i) << std::endl;
+void unique_wait() {
+	unique_lock<mutex> lk(mtx);
+	while(!pred) cv.wait(lk);
+	cout << "unique_wait " << lk.owns_lock() << endl;
+	// 这里的输出是永远不会因多线程重叠错位的，因为线程被唤醒后会自动获取锁的所有权，成功获取到mtx所有权的线程可以继续运行
+	// 而没有获取到锁的线程虽然因为notify_all不在cv的阻塞队列里了，但是仍然在运行lk.lock()时被阻塞，只有锁释放时才会继续运行抢占锁
 }
 
-void consumer(int i) {
-	while(true) {
-		std::string str;
-		{
-			std::unique_lock<std::mutex> lk(mtx);
-			cv_not_empty.wait(
-			    lk, []() { return !tasks.empty() || active_producers.load() == 0; }); // 注意停止判断也要放在 cv 里
+void unique_notify() {
+	{
+		lock_guard<mutex> lk(mtx); // 这里获取锁是为了防止唤醒错过，而notify_all最好不要在临界区内
+		pred = true;
+	} // 先unlock然后notify_all，减少虚假唤醒，即虽然被通知唤醒的线程不在cv的阻塞队列里了，但是会由于尝试获取mtx的所有权而阻塞
+	// 如果先 notify 后 unlock，等待线程可能马上尝试获取锁，但锁还没释放，会浪费 CPU 进行竞争
+	cv.notify_all(); // 不能将notify_all换成notify_one，这样只有一个线程被唤醒
+}
 
-			// 没有生产者且队列已空，说明系统中的任务已经全部处理完成。
-			if(tasks.empty() && active_producers.load() == 0) {
-				break;
-			}
+shared_mutex smtx;
+bool spred;
+condition_variable_any scv;
 
-			std::cout << std::format("[consumer] {} 获取任务", i) << std::endl;
-			str = std::move(tasks.front());
-			tasks.pop();
-			lk.unlock(); // 先解锁后 notify_one 减少虚假唤醒
-			cv_not_full.notify_one();
-		} // 串行区，消费者取出任务
+void shared_wait() {
+	shared_lock<shared_mutex> lk(
+	    smtx); // 这里使用的是读锁，后续条件变量唤醒后会并行运行，通过 shared_lock 将 lock 的语义转化为 shared_lock
+	while(!spred) scv.wait(lk); // wait 结束后线程获取到的是读锁，多个 shared_wait 线程可以并行运行
+	cout << "shared_wait " << lk.owns_lock() << endl; // 这里是并行运行，会重叠
+}
 
-		{
-			std::cout << std::format("[consumer] {} 处理任务", i) << std::endl;
-			std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 模拟任务处理
-			std::cout << std::format("{} 执行完成", str) << std::endl;
-		} // 并行区，消费者处理任务
-	}
-	std::cout << std::format("[consumer] {} exit", i) << std::endl;
+void shared_notify() {
+	{
+		lock_guard<shared_mutex> lk(smtx); // 这里使用写锁，因为需要修改 spred 的值
+		spred = true;
+	} // 先unlock然后notify_all，减少虚假唤醒，即虽然被通知唤醒的线程不在cv的阻塞队列里了，但是会由于尝试获取mtx的所有权而阻塞
+	// 如果先 notify 后 unlock，等待线程可能马上尝试获取锁，但锁还没释放，会浪费 CPU 进行竞争
+	scv.notify_all(); // 不能将notify_all换成notify_one，这样只有一个线程被唤醒
 }
 
 int main() {
-	constexpr int producer_count = 3;
-	constexpr int consumer_count = 3;
-	std::vector<std::thread> p_vec, c_vec;
-	p_vec.reserve(producer_count);
-	c_vec.reserve(consumer_count);
+	for(int i = 0; i < 100; ++i) {
+		spred = false; // 放到jthread前，避免影响正常的执行流程
+		jthread tw1(unique_wait);
+		jthread tw2(unique_wait);
+		jthread tw3(unique_wait);
+		jthread tn(unique_notify);
+	} // jthread是thread的RAII实现，在析构时自动 join
+	// 运行结果是输出300行"unique_wait 1"，且不会错位和重叠
 
-	for(int i = 0; i < producer_count; ++i) {
-		++active_producers;
-		p_vec.emplace_back(producer, i);
+	this_thread::sleep_for(100ms);
+	for(int i = 0; i < 100; ++i) {
+		spred = false;
+		jthread tw1(shared_wait);
+		jthread tw2(shared_wait);
+		jthread tw3(shared_wait);
+		jthread tn(shared_notify);
 	}
-
-	for(int i = 0; i < consumer_count; ++i) {
-		c_vec.emplace_back(consumer, i);
-	}
-
-	std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-	// 这里只停止“继续生产新任务”，消费者会把队列中的剩余任务处理完再退出。
-	stop_produce = true;
-	cv_not_full.notify_all();
-
-	for(int i = 0; i < producer_count; ++i) {
-		p_vec[i].join();
-		std::cout << std::format("[producer] {} exited", i) << std::endl;
-	}
-
-	for(int i = 0; i < consumer_count; ++i) {
-		c_vec[i].join();
-		std::cout << std::format("[consumer] {} exited", i) << std::endl;
-	}
-
-	// 所有工作线程结束后再读取队列状态，避免与并发访问形成数据竞争。
-	{
-		std::lock_guard<std::mutex> lk(mtx);
-		std::cout << "结束时 剩余任务数: " << tasks.size() << std::endl;
-		while(!tasks.empty()) {
-			std::cout << std::format("缺少执行 {}", tasks.front()) << std::endl;
-			tasks.pop();
-		}
-	}
-
 	return 0;
 }

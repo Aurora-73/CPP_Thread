@@ -8,7 +8,7 @@
 
 // 通用互斥锁管理（RAII）
 /*
-注意：C++中临时对象（未命名的变量）的生命周期截止到完整表达式结束！！！！
+注意：C++中临时对象（未命名的变量）的生命周期截止到完整表达式结束！！而不是和命名变量一样到作用域结束
 
 lock_guard  实现严格基于作用域的互斥体所有权包装器 (类模板)
     构造函数：
@@ -265,14 +265,14 @@ int main() {
 		cout << '\n' << "scoped_lock right used" << endl;
 	} // 多个互斥锁用 scoped_lock 或者 void lock( Lockable1& , Lockable2&...); 防止死锁
 
-		{
-			timed_mutex mtx1, mtx2;
-			vector<thread> tv;
-			for(int i = 0; i < 100; ++i) {
-				tv.emplace_back(foo_two_timeout, 2 * i, ref(mtx1), ref(mtx2));
-				tv.emplace_back(foo_two_timeout, 2 * i + 1, ref(mtx2), ref(mtx1));
-			}
-			for(auto &t : tv) t.join();
-			cout << '\n' << "timed_mutex timeout demo finished" << endl;
-		} // 获取多个锁的次序不一致时可能死锁；这里改用超时锁演示“拿不到第二把锁”而不让程序卡死
-	}
+	{
+		timed_mutex mtx1, mtx2;
+		vector<thread> tv;
+		for(int i = 0; i < 100; ++i) {
+			tv.emplace_back(foo_two_timeout, 2 * i, ref(mtx1), ref(mtx2));
+			tv.emplace_back(foo_two_timeout, 2 * i + 1, ref(mtx2), ref(mtx1));
+		}
+		for(auto &t : tv) t.join();
+		cout << '\n' << "timed_mutex timeout demo finished" << endl;
+	} // 获取多个锁的次序不一致时可能死锁；这里改用超时锁演示“拿不到第二把锁”而不让程序卡死
+}

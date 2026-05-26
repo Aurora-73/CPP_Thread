@@ -1,5 +1,6 @@
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
@@ -77,6 +78,11 @@ std::shared_mutex 支持共享锁和独占锁
 using namespace std;
 using namespace std::chrono_literals;
 
+void pause() {
+	cout << "Press Enter to continue..." << endl;
+	cin.get();
+}
+
 mutex mtx;
 timed_mutex timed_mtx;
 recursive_mutex recursive_mtx;
@@ -144,6 +150,58 @@ void shared_writer(int &value) {
 
 int main() {
 	{
+		mutex mtx;
+		auto copyable = [&](int a) {
+			mtx.lock();
+			cout << "copyable " << a << endl;
+			mtx.unlock();
+		};
+
+		auto not_copyable = [p = make_unique<int>(2), &mtx] {
+			mtx.lock();
+			cout << "not_copyable " << *p << endl;
+			mtx.unlock();
+		};
+
+		// 捕获了不可拷贝对象的 lambda 不能拷贝？
+		jthread t1(copyable, 1); // 拷贝也不会报错
+		jthread t2(std::ref(not_copyable));
+		// 这里的 not_copyable不可拷贝，因此 jthread t2(not_copyable)报错，需要 ref 或者 move
+	}
+
+	pause();
+
+	{
+		struct functor {
+			mutex mtx;
+			string name;
+
+			functor() = delete;
+			functor(string &&_name) : name(_name) { }
+
+			void operator()(int a) {
+				mtx.lock();
+				cout << name << ".operator() " << a << endl;
+				mtx.unlock();
+			}
+
+			void number_function(int a) {
+				mtx.lock();
+				cout << name << ".number_function " << a << endl;
+				mtx.unlock();
+			}
+		};
+
+		auto fu = functor("fu");
+		jthread t3(std::ref(fu), 3);                           // 调用 operator()
+		jthread t4(functor::operator(), &fu, 4);               // 调用 operator()
+		jthread t6(functor::number_function, &fu, 5);          // 调用成员函数
+		jthread t5(functor::number_function, std::ref(fu), 6); // 调用成员函数
+	}
+
+	pause();
+
+	{
 		int a = 0;
 		thread t1(foo1, ref(a)); // 使用 thread 和 ref
 		thread t2(foo1, ref(a));
@@ -151,6 +209,8 @@ int main() {
 		t2.join();
 		cout << "Unsafe final value of a: " << a << endl;
 	} // 这里有数据竞争，结果是未定义行为，只用于演示“不加锁会出问题”
+
+	pause();
 
 	{
 		int a = 0;
@@ -160,6 +220,8 @@ int main() {
 		cout << "Serial final value of a: " << a << endl;
 	} // 这里本质上是串行运行的，因为join是阻塞到子线程运行结束，因此声明后直接join实际上是串行
 
+	pause();
+
 	{
 		int a = 0;
 		thread t1(foo2, ref(a));
@@ -168,6 +230,8 @@ int main() {
 		t2.join();
 		cout << "Safe final value of a: " << a << endl;
 	} // 多个线程写入同一个内存区域需要上锁
+
+	pause();
 
 	{
 		vector<int> vec {0, 0, 0};
@@ -179,6 +243,8 @@ int main() {
 		t3.join();
 		cout << '[' << vec[0] << ' ' << vec[1] << ' ' << vec[2] << ']' << endl;
 	} // vector 已固定大小，且每个线程只写不同下标，因此这里不需要上锁
+
+	pause();
 
 	{
 		thread t1(hold_timed_mutex);
@@ -196,7 +262,7 @@ int main() {
 		t1.join();
 	} // 超时锁，尝试在一段时间内获取锁，获取成功返回true，失败返回false，不阻塞
 
-	{ recursive_print(3); } // 递归锁，可以被同一个线程多次锁定，每次锁定计数器+1，直到计数器清0才释放锁
+	pause();
 
 	{
 		int value = 0;
@@ -207,6 +273,12 @@ int main() {
 		reader1.join();
 		reader2.join();
 	} // 读写锁，施加读锁后尝试获取写锁会阻塞，施加写锁后尝试获取读写锁都会阻塞
+
+	pause();
+
+	{ recursive_print(3); } // 递归锁，可以被同一个线程多次锁定，每次锁定计数器+1，直到计数器清0才释放锁
+
+	pause();
 
 	{
 		cout << "main thread sleep for 100ms" << endl;

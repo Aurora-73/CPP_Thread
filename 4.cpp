@@ -2,6 +2,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <format>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <queue>
@@ -96,64 +97,106 @@ cv_status(枚举类) 列出条件变量上带超时等待的可能结果 { timeo
 
 using namespace std;
 
-mutex mtx;
-bool pred;
-condition_variable cv;
-
-void unique_wait() {
-	unique_lock<mutex> lk(mtx);
-	while(!pred) cv.wait(lk);
-	cout << "unique_wait " << lk.owns_lock() << endl;
-	// 这里的输出是永远不会因多线程重叠错位的，因为线程被唤醒后会自动获取锁的所有权，成功获取到mtx所有权的线程可以继续运行
-	// 而没有获取到锁的线程虽然因为notify_all不在cv的阻塞队列里了，但是仍然在运行lk.lock()时被阻塞，只有锁释放时才会继续运行抢占锁
-}
-
-void unique_notify() {
-	{
-		lock_guard<mutex> lk(mtx); // 这里获取锁是为了防止唤醒错过，而notify_all最好不要在临界区内
-		pred = true;
-	} // 先unlock然后notify_all，减少虚假唤醒，即虽然被通知唤醒的线程不在cv的阻塞队列里了，但是会由于尝试获取mtx的所有权而阻塞
-	// 如果先 notify 后 unlock，等待线程可能马上尝试获取锁，但锁还没释放，会浪费 CPU 进行竞争
-	cv.notify_all(); // 不能将notify_all换成notify_one，这样只有一个线程被唤醒
-}
-
-shared_mutex smtx;
-bool spred;
-condition_variable_any scv;
-
-void shared_wait() {
-	shared_lock<shared_mutex> lk(
-	    smtx); // 这里使用的是读锁，后续条件变量唤醒后会并行运行，通过 shared_lock 将 lock 的语义转化为 shared_lock
-	while(!spred) scv.wait(lk); // wait 结束后线程获取到的是读锁，多个 shared_wait 线程可以并行运行
-	cout << "shared_wait " << lk.owns_lock() << endl; // 这里是并行运行，会重叠
-}
-
-void shared_notify() {
-	{
-		lock_guard<shared_mutex> lk(smtx); // 这里使用写锁，因为需要修改 spred 的值
-		spred = true;
-	} // 先unlock然后notify_all，减少虚假唤醒，即虽然被通知唤醒的线程不在cv的阻塞队列里了，但是会由于尝试获取mtx的所有权而阻塞
-	// 如果先 notify 后 unlock，等待线程可能马上尝试获取锁，但锁还没释放，会浪费 CPU 进行竞争
-	scv.notify_all(); // 不能将notify_all换成notify_one，这样只有一个线程被唤醒
+void pause() {
+	cout << "Press Enter to continue..." << endl;
+	cin.get();
 }
 
 int main() {
-	for(int i = 0; i < 100; ++i) {
-		spred = false; // 放到jthread前，避免影响正常的执行流程
-		jthread tw1(unique_wait);
-		jthread tw2(unique_wait);
-		jthread tw3(unique_wait);
-		jthread tn(unique_notify);
-	} // jthread是thread的RAII实现，在析构时自动 join
-	// 运行结果是输出300行"unique_wait 1"，且不会错位和重叠
+	{
+		cout << "使用 cv 访问子线程栈区的变量" << endl;
+		int *ptr = nullptr;
+		mutex m;
+		condition_variable cv;
+		jthread t([&]() {
+			int val = 10;
+			{
+				lock_guard lk(m);
+				ptr = &val;
+			}
+			cv.notify_one();
+			unique_lock ul(m);
+			cv.wait(ul, [&] { return !bool(ptr); });
+		});
+		unique_lock ul(m);
+		cv.wait(ul, [&] { return bool(ptr); });
+		cout << ptr << " : " << *ptr << endl;
+		{
+			lock_guard lk(m);
+			ptr = nullptr;
+		}
+		cv.notify_one();
 
-	this_thread::sleep_for(100ms);
-	for(int i = 0; i < 100; ++i) {
-		spred = false;
-		jthread tw1(shared_wait);
-		jthread tw2(shared_wait);
-		jthread tw3(shared_wait);
-		jthread tn(shared_notify);
+	} // 使用 cv 访问子线程栈区的变量
+
+	pause();
+
+	{
+		cout << "cv 使用示例" << endl;
+		mutex mtx;
+		bool pred = false;
+		condition_variable cv;
+
+		auto unique_wait = [&]() {
+			unique_lock<mutex> lk(mtx);
+			while(!pred) cv.wait(lk);
+			cout << "unique_wait " << lk.owns_lock() << endl;
+			// 这里的输出是永远不会因多线程重叠错位的，因为线程被唤醒后会自动获取锁的所有权，成功获取到mtx所有权的线程可以继续运行
+			// 而没有获取到锁的线程虽然因为notify_all不在cv的阻塞队列里了，但是仍然在运行lk.lock()时被阻塞，只有锁释放时才会继续运行抢占锁
+		};
+
+		auto unique_notify = [&]() {
+			{
+				lock_guard<mutex> lk(mtx); // 这里获取锁是为了防止唤醒错过，而notify_all最好不要在临界区内
+				pred = true;
+			} // 先unlock然后notify_all，减少虚假唤醒，即虽然被通知唤醒的线程不在cv的阻塞队列里了，但是会由于尝试获取mtx的所有权而阻塞
+			// 如果先 notify 后 unlock，等待线程可能马上尝试获取锁，但锁还没释放，会浪费 CPU 进行竞争
+			cv.notify_all(); // 不能将notify_all换成notify_one，这样只有一个线程被唤醒
+		};
+
+		for(int i = 0; i < 100; ++i) {
+			pred = false; // 放到jthread前，避免影响正常的执行流程
+			jthread tw1(unique_wait);
+			jthread tw2(unique_wait);
+			jthread tw3(unique_wait);
+			jthread tn(unique_notify);
+		} // jthread是thread的RAII实现，在析构时自动 join
+		// 运行结果是输出300行"unique_wait 1"，且不会错位和重叠
 	}
+
+	pause();
+
+	{
+		cout << "cv 使用示例 shared_mutex" << endl;
+
+		shared_mutex smtx;
+		bool spred = false;
+		condition_variable_any scv;
+
+		auto shared_wait = [&]() {
+			shared_lock<shared_mutex> lk(
+			    smtx); // 这里使用的是读锁，后续条件变量唤醒后会并行运行，通过 shared_lock 将 lock 的语义转化为 shared_lock
+			while(!spred) scv.wait(lk); // wait 结束后线程获取到的是读锁，多个 shared_wait 线程可以并行运行
+			cout << "shared_wait " << lk.owns_lock() << endl; // 这里是并行运行，会重叠
+		};
+
+		auto shared_notify = [&]() {
+			{
+				lock_guard<shared_mutex> lk(smtx); // 这里使用写锁，因为需要修改 spred 的值
+				spred = true;
+			} // 先unlock然后notify_all，减少虚假唤醒，即虽然被通知唤醒的线程不在cv的阻塞队列里了，但是会由于尝试获取mtx的所有权而阻塞
+			// 如果先 notify 后 unlock，等待线程可能马上尝试获取锁，但锁还没释放，会浪费 CPU 进行竞争
+			scv.notify_all(); // 不能将notify_all换成notify_one，这样只有一个线程被唤醒
+		};
+		this_thread::sleep_for(100ms);
+		for(int i = 0; i < 100; ++i) {
+			spred = false;
+			jthread tw1(shared_wait);
+			jthread tw2(shared_wait);
+			jthread tw3(shared_wait);
+			jthread tn(shared_notify);
+		}
+	}
+
 	return 0;
 }

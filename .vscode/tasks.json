@@ -32,7 +32,8 @@
         "${file}",
         // 输出也用反斜杠
         "-o",
-        "${fileDirname}\\\\${fileBasenameNoExtension}.exe"
+        "${fileDirname}\\\\${fileBasenameNoExtension}.exe",
+        "-D_GLIBCXX_DEBUG"
       ],
       "dependsOn": "C++ Clean",
       "problemMatcher": [

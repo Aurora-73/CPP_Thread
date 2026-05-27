@@ -81,28 +81,34 @@ int main() {
 	{
 		string s = "Hello";
 		auto task = [s = std::move(s)]() -> string {
-			cout << "sleep for 1 second" << endl;
-			this_thread::sleep_for(1s);
+			cout << "sleep for 0.1 second" << endl;
+			this_thread::sleep_for(100ms);
 			return s + " World";
 		};
-		packaged_task<string()> p_task(task);
+
+		packaged_task<string()> p_task(std::move(task));
 		future<string> fu = p_task.get_future();
 		jthread th(std::ref(p_task));
 		// 注意不能直接写jthread th(p_task); 因为线程内部会拷贝一次p_task，而p_task没有拷贝构造和拷贝赋值
 		// jthread th(packaged_task<string()>::operator(), &p_task); 也可以
 		cout << fu.get() << endl;
+
 	} // packaged_task示例
 
 	pause();
 
 	{
-		promise<int &> p;
-		future f = p.get_future();
-		int val = 0;
-		jthread t([&] { p.set_value(val); });
-		f.get() = 2;
-		cout << val << endl;
-	} // template<class R> class promise<R&>; 是引用模版
+		string arg = "Hello";
+		auto task = [](string &s) -> string {
+			cout << "sleep for 1 second" << endl;
+			this_thread::sleep_for(1s);
+			return s + " World";
+		};
+		packaged_task<string(string &)> p_task(task); // 需要带引用类型，构造时只加入函数，不加入参数
+		future<string> fu = p_task.get_future();
+		jthread th(std::ref(p_task), std::ref(arg)); // 运行时才传入参数
+		cout << fu.get() << endl;
+	} // packaged_task示例，带参数
 
 	pause();
 

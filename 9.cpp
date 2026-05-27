@@ -7,17 +7,146 @@
 #include <mutex>
 #include <queue>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-using namespace std;
-using namespace std::chrono;
+/* 固定任务签名的专用线程池：
+1. 队列中直接保存 packaged_task<R()>
+2. 每个线程池实例只处理一种返回值类型的任务
+3. 提交的任务本身就需要是擦除参数类型的
+4. submit 创建packaged_task，返回值包装为 future */
 
-// 使用 packaged_task 实现任务队列：
-// 1. 提交方创建任务并拿到 future
-// 2. 工作线程从队列取出任务并执行
-// 3. 提交方稍后通过 future 获取结果
+using namespace std;
+
+template <typename R>
+class FixedThreadPool {
+public:
+	using result_type = R;
+	using task_type = packaged_task<R()>;
+
+	FixedThreadPool(size_t worker_count, size_t capacity) : max_size(capacity) {
+		if(worker_count == 0) {
+			throw invalid_argument("worker count must be positive");
+		}
+		if(capacity == 0) {
+			throw invalid_argument("task queue capacity must be positive");
+		}
+
+		workers.reserve(worker_count);
+		for(size_t i = 0; i < worker_count; ++i) {
+			workers.emplace_back(&FixedThreadPool::worker_loop, this);
+		}
+	}
+
+	FixedThreadPool() :
+	    FixedThreadPool(max(1u, std::thread::hardware_concurrency()),
+	                    max(1u, std::thread::hardware_concurrency()) * 2) { }
+
+	~FixedThreadPool() {
+		shutdown();
+	}
+
+	FixedThreadPool(const FixedThreadPool &) = delete;
+	FixedThreadPool &operator=(const FixedThreadPool &) = delete;
+
+	future<result_type> submit(task_type task) {
+		future<result_type> fu = task.get_future();
+
+		{
+			unique_lock<mutex> lk(mtx);
+			// 有界队列：满了就等待，关闭后停止接收新任务。
+			cv_not_full.wait(lk, [this] { return tasks.size() < max_size || stop_flag; });
+
+			if(stop_flag) {
+				throw runtime_error("thread pool has been stopped");
+			}
+
+			tasks.emplace(std::move(task));
+		}
+
+		cv_not_empty.notify_one();
+		return fu;
+	}
+
+	void shutdown() {
+		if(stop_flag.exchange(true)) {
+			return;
+		}
+
+		// 唤醒所有可能阻塞在“队列满/空”条件上的线程，让它们观察到停止状态。
+		cv_not_full.notify_all();
+		cv_not_empty.notify_all();
+
+		for(auto &worker : workers) {
+			if(worker.joinable()) {
+				worker.join();
+			}
+		}
+	}
+
+private:
+	void worker_loop() {
+		while(true) {
+			task_type task;
+			{
+				unique_lock<mutex> lk(mtx);
+				// 队列为空时等待；关闭后若队列也空了，worker 才真正退出。
+				cv_not_empty.wait(lk, [this] { return !tasks.empty() || stop_flag; });
+
+				if(tasks.empty()) {
+					break;
+				}
+
+				task = std::move(tasks.front());
+				tasks.pop();
+			}
+
+			cv_not_full.notify_one();
+			task();
+		}
+	}
+
+private:
+	const size_t max_size;
+	queue<task_type> tasks;
+	vector<thread> workers;
+	mutex mtx;
+	condition_variable cv_not_full;
+	condition_variable cv_not_empty;
+	atomic<bool> stop_flag = false;
+};
+
+int main() {
+	constexpr int task_count = 10000;
+
+	FixedThreadPool<string> thread_pool;
+
+	vector<future<string>> result_futures;
+	result_futures.reserve(task_count);
+
+	string longestPalindrome(const string &);
+
+	mt19937 rng(random_device {}());
+	uniform_int_distribution<int> dist(0, INT_MAX);
+
+	for(int i = 0; i < task_count; ++i) {
+		string input = format("{}{}{}{}", dist(rng), dist(rng), dist(rng), dist(rng));
+		packaged_task<string()> task([input = std::move(input)] { return longestPalindrome(input); });
+		result_futures.push_back(thread_pool.submit(std::move(task)));
+	}
+
+	cout << "\n[main] 所有任务已提交，开始统一收集结果\n" << endl;
+
+	for(int i = 0; i < task_count; ++i) {
+		cout << format("[result] task {} -> {}", i, result_futures[i].get()) << endl;
+	}
+
+	thread_pool.shutdown();
+
+	return 0;
+}
 
 string longestPalindrome(const string &s) {
 	cout << format("计算 \"{}\" 的最长回文子串", s) << endl;
@@ -47,124 +176,4 @@ string longestPalindrome(const string &s) {
 	}
 
 	return s.substr(res_beg, res_size);
-}
-
-class TaskQueue {
-private:
-	const size_t max_size;
-	queue<packaged_task<string()>> tasks;
-	mutex mtx;
-	condition_variable cv_not_full;
-	condition_variable cv_not_empty;
-	bool stop = false;
-
-public:
-	explicit TaskQueue(size_t cap) : max_size(cap) { }
-
-	future<string> submit(string input) {
-		packaged_task<string()> task([input = std::move(input)] {
-			this_thread::sleep_for(milliseconds(10)); // 模拟处理开销
-			return longestPalindrome(input);
-		});
-
-		future<string> fu = task.get_future();
-
-		{
-			unique_lock<mutex> lk(mtx);
-			cv_not_full.wait(lk, [this] { return tasks.size() < max_size || stop; });
-
-			if(stop) {
-				throw runtime_error("task queue has been stopped");
-			}
-
-			tasks.push(std::move(task));
-		}
-
-		cv_not_empty.notify_one();
-		return fu;
-	}
-
-	bool take(packaged_task<string()> &task) {
-		unique_lock<mutex> lk(mtx);
-		cv_not_empty.wait(lk, [this] { return !tasks.empty() || stop; });
-
-		if(tasks.empty()) {
-			return false; // stop == true 且队列已空
-		}
-
-		task = std::move(tasks.front());
-		tasks.pop();
-
-		lk.unlock();
-		cv_not_full.notify_one();
-		return true;
-	}
-
-	void shutdown() {
-		{
-			lock_guard<mutex> lk(mtx);
-			stop = true;
-		}
-		cv_not_full.notify_all();
-		cv_not_empty.notify_all();
-	}
-};
-
-void worker(TaskQueue &task_queue, int worker_id) {
-	while(true) {
-		packaged_task<string()> task;
-		if(!task_queue.take(task)) {
-			break;
-		}
-
-		cout << format("[worker] {} 执行任务", worker_id) << endl;
-		task(); // 这里执行后，对应 future 就会变为 ready
-	}
-
-	cout << format("[worker] {} exit", worker_id) << endl;
-}
-
-string make_input(int i, int id) {
-	thread_local mt19937 eg(random_device {}());
-	uniform_int_distribution<int> uf(0, INT_MAX);
-
-	auto now = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-	return format("{}{}{}{}", i, now, id, uf(eg));
-}
-
-int main() {
-	constexpr int worker_count = 3;
-	constexpr int task_count = 12;
-
-	TaskQueue task_queue(5);
-	vector<thread> workers;
-	workers.reserve(worker_count);
-
-	for(int i = 0; i < worker_count; ++i) {
-		workers.emplace_back(worker, std::ref(task_queue), i);
-	}
-
-	vector<future<string>> results;
-	results.reserve(task_count);
-
-	for(int i = 0; i < task_count; ++i) {
-		string input = make_input(i % 3, i);
-		cout << format("[main] 提交任务 {}", input) << endl;
-		results.push_back(task_queue.submit(std::move(input)));
-	}
-
-	cout << "\n[main] 所有任务已提交，开始统一收集结果\n" << endl;
-
-	for(int i = 0; i < task_count; ++i) {
-		cout << format("[result] task {} -> {}", i, results[i].get()) << endl;
-	}
-
-	task_queue.shutdown();
-
-	for(int i = 0; i < worker_count; ++i) {
-		workers[i].join();
-		cout << format("[main] worker {} joined", i) << endl;
-	}
-
-	return 0;
 }

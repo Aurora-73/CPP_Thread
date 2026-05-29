@@ -33,7 +33,9 @@
         // 输出也用反斜杠
         "-o",
         "${fileDirname}\\\\${fileBasenameNoExtension}.exe",
-        "-D_GLIBCXX_DEBUG"
+        "-D_GLIBCXX_DEBUG",
+        "-pthread",
+        "-latomic"
       ],
       "dependsOn": "C++ Clean",
       "problemMatcher": [

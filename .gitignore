@@ -9,3 +9,5 @@ CMakeLists.txt
 .history
 test.cpp
 install.sh
+__pycache__
+.claude

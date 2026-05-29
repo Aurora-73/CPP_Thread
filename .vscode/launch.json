@@ -21,6 +21,16 @@
           "ignoreFailures": true
         },
         {
+          "description": "设置非停止模式",
+          "text": "set non-stop off",
+          "ignoreFailures": true
+        },
+        {
+          "description": "关闭分页",
+          "text": "set pagination off",
+          "ignoreFailures": true
+        },
+        {
           "text": "skip -gfi D:/mingw64/lib/gcc/x86_64-w64-mingw32/15.1.0/include/c++/**"
         },
         {

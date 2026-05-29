@@ -1,16 +1,15 @@
-#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <format>
 #include <functional>
 #include <iostream>
 #include <mutex>
-#include <queue>
 #include <shared_mutex>
 #include <thread>
-#include <vector>
 
-// 条件变量，是一种同步原语，允许多个线程相互通信。它允许一定数量的线程等待（可能带超时）来自另一个线程的通知，表明它们可以继续。条件变量总是与互斥体关联。在头文件 <condition_variable> 中定义
+// 条件变量，是一种同步原语，允许多个线程相互通信。
+// 它允许一定数量的线程等待（可能带超时）来自另一个线程的通知，表明它们可以继续。
+// 条件变量总是与互斥体关联。在头文件 <condition_variable> 中定义
 /*
 condition_variable(类) 提供与 std::unique_lock 关联的条件变量
     只有默认的无参构造，不支持拷贝和移动
@@ -23,7 +22,7 @@ condition_variable(类) 提供与 std::unique_lock 关联的条件变量
         wait 的执行过程是原子性的 { 调用 __lock.unlock()，把当前线程挂到 _M_cond 的等待队列，阻塞线程 } ，不会在解锁和进入等待之间出现中间状态（这是 CV 存在的核心理由）。
         （让操作系统调度其他线程解除阻塞，其他线程调用notify_*() 会使至少一个/所有等待线程变为“可运行状态”（ready）)
         当解除阻塞时，调用 __lock.lock()（可能会在该锁上阻塞），然后wait函数返回，线程继续执行
-        __lock 的释放和再次获取是waith函数自动管理的，线程会在函数返回前抢到锁，抢不到就在锁上阻塞。
+        __lock 的释放和再次获取是wait函数自动管理的，线程会在函数返回前抢到锁，抢不到就在锁上阻塞。
 
     void wait(unique_lock<mutex>& __lock, _Predicate __p) {	while (!__p()) wait(__lock); };
         这是标准实现方式：循环检查 predicate，因为即使线程被唤醒，也可能是“虚假唤醒”（spurious wakeup），所以标准要求必须循环判断条件，确保安全。
@@ -188,7 +187,6 @@ int main() {
 			// 如果先 notify 后 unlock，等待线程可能马上尝试获取锁，但锁还没释放，会浪费 CPU 进行竞争
 			scv.notify_all(); // 不能将notify_all换成notify_one，这样只有一个线程被唤醒
 		};
-		this_thread::sleep_for(100ms);
 		for(int i = 0; i < 100; ++i) {
 			spred = false;
 			jthread tw1(shared_wait);

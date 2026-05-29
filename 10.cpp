@@ -4,6 +4,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <random>
@@ -27,16 +28,16 @@ using namespace std;
 
 class ThreadPool {
 public:
-	ThreadPool(int num_threads) {
-		if(num_threads <= 0) {
+	ThreadPool(unsigned int num_threads) {
+		if(num_threads == 0) {
 			throw invalid_argument("thread count must be positive");
 		}
-		for(int i = 0; i < num_threads; ++i) {
+		for(unsigned int i = 0; i < num_threads; ++i) {
 			workers.emplace_back(&ThreadPool::worker_loop, this);
 		}
 	}
 
-	ThreadPool() : ThreadPool(max(1u, std::thread::hardware_concurrency())) { }
+	ThreadPool() : ThreadPool(max(1u, thread::hardware_concurrency())) { }
 
 	~ThreadPool() {
 		shutdown();
@@ -139,17 +140,18 @@ private:
 	}
 };
 
+string task1(string &&);
+
 int main() {
 	ThreadPool thread_pool;
 
-	string task1(string &&);
 	auto task2 = [](string &&s) -> string {
 		this_thread::sleep_for(1ms);
 		return s + " finished";
 	};
 
 	mt19937 rng(random_device {}());
-	uniform_int_distribution<int> dist(0, INT_MAX);
+	uniform_int_distribution<int> dist(0, numeric_limits<int>::max());
 
 	vector<future<string>> result_futures1;
 	for(int i = 0; i < 100; ++i) {
@@ -177,7 +179,7 @@ int main() {
 }
 
 string task1(string &&s) {
-	// 最长子数组作为示例
+	// 最长回文子串作为示例
 	int n = static_cast<int>(s.size());
 	if(n == 0) return "";
 

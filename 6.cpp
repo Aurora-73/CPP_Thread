@@ -11,7 +11,7 @@
 /*
 生产者消费者问题：
     1、生产者在线程私有区并行地准备任务，在临界区内串行地把任务放入共享队列；
-        消费者在线界区内串行地从共享队列取任务，在临界区外并行地处理任务。
+        消费者在临界区内串行地从共享队列取任务，在临界区外并行地处理任务。
 
     2、这里使用两个 condition_variable，分别对应两类等待谓词：
         - 生产者等待“队列未满”或“系统已停止继续生产”；
@@ -28,21 +28,16 @@
     4、退出分两步：
         - main 线程先设置 stop_produce，表示不再接收新的生产任务；
         - 各生产者陆续退出，最后一个生产者退出时唤醒所有消费者；
-        - 消费者会继续处理队列中剩余的任务，直到发现“所有生产者都已退出且队列为空”后再结束。
+        - 消费者会继续处理队列中剩余的任务，直到发现”所有生产者都已退出且队列为空”后再结束。
         因此，系统能正确退出，不是因为 notify 次数多于任务数，
-        而是因为消费者的等待谓词同时覆盖了“还有任务可做”和“不会再有新任务”这两种情况。
-    
-    6、wait 必须放在循环/谓词检查里，而不能假设“被唤醒就一定条件成立”，因为条件变量可能出现虚假唤醒。
+        而是因为消费者的等待谓词同时覆盖了”还有任务可做”和”不会再有新任务”这两种情况。
+
+    5、wait 必须放在循环/谓词检查里，而不能假设”被唤醒就一定条件成立”，因为条件变量可能出现虚假唤醒。
        即cv.wait(lk, prod) 或 while(!prod) cv.wait()
 */
-
-constexpr int max_size = 5;
-constexpr int producer_count = 3;
-constexpr int consumer_count = 3;
-
 class TaskQueue {
 public:
-	explicit TaskQueue(int producer_count) : active_producers_(producer_count) {}
+	explicit TaskQueue(int max_size, int producer_count) : max_size_(max_size), active_producers_(producer_count) { }
 
 	void request_stop_producing() {
 		std::lock_guard<std::mutex> lk(mtx_);
@@ -52,7 +47,7 @@ public:
 
 	bool push_task(std::string task) {
 		std::unique_lock<std::mutex> lk(mtx_);
-		cv_not_full_.wait(lk, [this]() { return tasks_.size() < max_size || stop_produce_; });
+		cv_not_full_.wait(lk, [this]() { return tasks_.size() < max_size_ || stop_produce_; });
 
 		// 一旦进入“停止接收新任务”状态，即使任务已经在临界区外准备好了，也不再入队。
 		if(stop_produce_) {
@@ -100,11 +95,15 @@ private:
 	std::condition_variable cv_not_full_;  // 队列未满时唤醒生产者
 	std::condition_variable cv_not_empty_; // 队列非空时唤醒消费者
 	std::queue<std::string> tasks_;
+	const int max_size_;
 	bool stop_produce_ = false;
 	int active_producers_;
 };
 
-TaskQueue task_queue(producer_count);
+constexpr int producer_count = 3;
+constexpr int consumer_count = 3;
+
+TaskQueue task_queue(5, producer_count);
 std::mutex task_id_mtx;
 int task_id = 0;
 

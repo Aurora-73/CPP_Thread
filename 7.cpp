@@ -94,15 +94,15 @@ future 等待一个异步设置的值 (类模板)
 		(1) 返回以 std::move(v) 在共享状态中存储的值 v。                                                                             
 		(2) 返回在共享状态中作为值存储的引用。                                                                                                          
 		(3) 无返回值，仅等待其完成。                                                                                                            
-		如果共享状态中保存的是异常，则重新抛出该异常。 如果调用 get 前 valid 为 fasle 通常抛异常                                                                                    
+		如果共享状态中保存的是异常，则重新抛出该异常。 如果调用 get 前 valid 为 false 通常抛异常                                                                                    
 		调用 get() 后，future 不再有效，valid() 为 false。 
 
 shared_future 等待一个异步设置的值（支持多个对象共享同一个 shared_state）(类模板)
-	future 不支持拷贝构造和拷贝赋值，且调用 get 后 valid 置为fasle，shared_future 支持多个对象共享同一个 shared_state，且调用 get 后不会置 valid 为 fasle
+	future 不支持拷贝构造和拷贝赋值，且调用 get 后 valid 置为false，shared_future 支持多个对象共享同一个 shared_state，且调用 get 后不会置 valid 为 false
 
 	构造函数：
 		shared_future() 无参构造，构造不指代共享状态，即 valid() 为 false 的 shared_future。
-		shared_future( std::future<T>&& other ) noexcept; 转移 other 所保有的共享状态给 *this。构造后，other.valid() == false 且 this->valid() 返回与 other.valid() 在构造前会返回者相同的值。
+		shared_future( std::future<T>&& other ) noexcept; 转移 other 所保有的共享状态给 *this。构造后，other.valid() == false 且 this->valid() == true（若 other 之前有效）。
 		支持拷贝构造/赋值和移动构造/赋值
 	析构函数：
 		若 *this 是指代共享状态的最后一个对象，则销毁共享状态。
@@ -114,7 +114,7 @@ shared_future 等待一个异步设置的值（支持多个对象共享同一个
 		(1) 返回在共享状态中存储的值的 const 引用。销毁共享状态后，通过此引用访问值的行为未定义。
 		(2) 返回在共享状态中作为值存储的引用。                                                                                                       
 		(3) 无返回值，仅等待其完成。                                                                                                            
-		如果共享状态中保存的是异常，则重新抛出该异常。 如果调用 get 前 valid 为 fasle 通常抛异常                                                                                       
+		如果共享状态中保存的是异常，则重新抛出该异常。 如果调用 get 前 valid 为 false 通常抛异常                                                                                       
 		调用 get() 后，shared_future 仍然有效
 	
 	valid、wait、wait_for、wait_until 函数同 future
@@ -132,11 +132,10 @@ int main() {
 	{
 		promise<int> *p = new promise<int>();
 		future f = p->get_future();
-		mutex mtx;
 		jthread t([&]() {
 			try {
 				cout << f.get() << endl;
-			} catch(exception &e) {
+			} catch(const exception &e) {
 				cout << "共享状态为异常" << endl;
 				cout << e.what() << endl;
 			}

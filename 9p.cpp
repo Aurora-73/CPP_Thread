@@ -5,6 +5,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -16,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-/* 实验版泛型线程池：
+/* 实验版继承式泛型线程池：
 1. submit 接收任意可调用对象和参数
 2. 先构造 my::packaged_task<R()> 保留 future
 3. 再额外包装成 my::packaged_task<void()>，统一放入队列
@@ -24,17 +25,11 @@
 
 namespace my {
 
-class packaged_task_root {
-public:
-	// 非模板虚基类，只负责提供统一析构入口。
-	virtual ~packaged_task_root() = default;
-};
-
-template <typename _Signature>
+template <typename Signature>
 class packaged_task_base;
 
-template <typename _Res, typename... _Args>
-class packaged_task_base<_Res(_Args...)> : public packaged_task_root {
+template <typename Res, typename... Args>
+class packaged_task_base<Res(Args...)> {
 public:
 	virtual ~packaged_task_base() = default;
 
@@ -45,18 +40,18 @@ public:
 	packaged_task_base &operator=(packaged_task_base &&) noexcept = default;
 
 	bool valid() const noexcept {
-		return static_cast<bool>(_M_state);
+		return static_cast<bool>(state_);
 	}
 
 	// future 从共享状态里的 promise 获取，因此同一个任务对象只能成功取一次 future。
-	std::future<_Res> get_future() {
-		return _M_state->promise.get_future();
+	std::future<Res> get_future() {
+		return state_->promise.get_future();
 	}
 
 	void reset() {
 		ensure_state();
-		// reset 的语义是“保留可调用对象，重建共享状态”，因此依赖 clone。
-		_M_state = _M_state->clone();
+		// reset 的语义是”保留可调用对象，重建共享状态”，因此依赖 clone。
+		state_ = state_->clone();
 	}
 
 protected:
@@ -64,46 +59,46 @@ protected:
 
 	struct state_base {
 		// 每个任务都自带一个 promise，共享状态通过它暴露给 future。
-		std::promise<_Res> promise;
+		std::promise<Res> promise;
 
 		virtual ~state_base() = default;
-		virtual void run(_Args... args) = 0;
+		virtual void run(Args... args) = 0;
 		// clone 用于 reset：重新创建一个同类型任务状态，但共享状态是新的。
 		virtual std::shared_ptr<state_base> clone() = 0;
 	};
 
-	explicit packaged_task_base(std::shared_ptr<state_base> state) noexcept : _M_state(std::move(state)) { }
+	explicit packaged_task_base(std::shared_ptr<state_base> state) noexcept : state_(std::move(state)) { }
 
 	void ensure_state() const {
-		if(!_M_state) {
+		if(!state_) {
 			throw std::future_error(std::future_errc::no_state);
 		}
 	}
 
-	std::shared_ptr<state_base> _M_state;
+	std::shared_ptr<state_base> state_;
 };
 
-template <typename _Signature>
+template <typename Signature>
 class packaged_task;
 
-template <typename _Res, typename... _Args>
-class packaged_task<_Res(_Args...)> : public packaged_task_base<_Res(_Args...)> {
-	using _Base = packaged_task_base<_Res(_Args...)>;
+template <typename Res, typename... Args>
+class packaged_task<Res(Args...)> : public packaged_task_base<Res(Args...)> {
+	using Base = packaged_task_base<Res(Args...)>;
 
-	template <typename _Fn>
-	struct state_impl final : _Base::state_base {
-		template <typename _FnArg>
-		explicit state_impl(_FnArg &&fn) : fn(std::forward<_FnArg>(fn)) { }
+	template <typename Fn>
+	struct state_impl final : Base::state_base {
+		template <typename FnArg>
+		explicit state_impl(FnArg &&fn) : fn(std::forward<FnArg>(fn)) { }
 
-		void run(_Args... args) override {
+		void run(Args... args) override {
 			try {
-				if constexpr(std::is_void_v<_Res>) {
+				if constexpr(std::is_void_v<Res>) {
 					// void 返回值的任务只需要执行函数，再把 promise 标记为就绪。
-					std::invoke(fn, std::forward<_Args>(args)...);
+					std::invoke(fn, std::forward<Args>(args)...);
 					this->promise.set_value();
 				} else {
 					// 非 void 返回值直接写入 promise。
-					this->promise.set_value(std::invoke(fn, std::forward<_Args>(args)...));
+					this->promise.set_value(std::invoke(fn, std::forward<Args>(args)...));
 				}
 			} catch(...) {
 				// 与标准 packaged_task 一样，把异常转发到 future 侧。
@@ -111,49 +106,50 @@ class packaged_task<_Res(_Args...)> : public packaged_task_base<_Res(_Args...)> 
 			}
 		}
 
-		std::shared_ptr<typename _Base::state_base> clone() override {
-			return std::make_shared<state_impl<_Fn>>(std::move(fn));
+		std::shared_ptr<typename Base::state_base> clone() override {
+			return std::make_shared<state_impl<Fn>>(std::move(fn));
 		}
 
-		_Fn fn;
+		Fn fn;
 	};
 
-	template <typename _Fn, typename _Fn2 = std::remove_cvref_t<_Fn>>
-	using not_same = std::enable_if_t<!std::is_same_v<packaged_task, _Fn2>, int>;
+	template <typename Fn, typename Fn2 = std::remove_cvref_t<Fn>>
+	using not_same = std::enable_if_t<!std::is_same_v<packaged_task, Fn2>, int>;
 
 public:
 	packaged_task() noexcept = default;
 
-	template <typename _Fn, not_same<_Fn> = 0>
-	explicit packaged_task(_Fn &&fn) : _Base(std::make_shared<state_impl<std::decay_t<_Fn>>>(std::forward<_Fn>(fn))) { }
+	template <typename Fn, not_same<Fn> = 0>
+	explicit packaged_task(Fn &&fn) : Base(std::make_shared<state_impl<std::decay_t<Fn>>>(std::forward<Fn>(fn))) { }
 
 	packaged_task(const packaged_task &) = delete;
 	packaged_task &operator=(const packaged_task &) = delete;
 	packaged_task(packaged_task &&) noexcept = default;
 	packaged_task &operator=(packaged_task &&) noexcept = default;
 
-	using _Base::get_future;
-	using _Base::reset;
-	using _Base::valid;
+	using Base::get_future;
+	using Base::reset;
+	using Base::valid;
 
-	void operator()(_Args... args) {
+	void operator()(Args... args) {
 		this->ensure_state();
-		this->_M_state->run(std::forward<_Args>(args)...);
+		this->state_->run(std::forward<Args>(args)...);
 	}
 };
 
 } // namespace my
 
 using namespace std;
+using namespace std::chrono_literals;
 
 class ThreadPool {
 public:
-	ThreadPool(int n) {
-		if(n <= 0) {
+	ThreadPool(unsigned int n) {
+		if(n == 0) {
 			throw invalid_argument("thread count must be positive");
 		}
 		workers.reserve(n);
-		for(int i = 0; i < n; ++i) {
+		for(unsigned int i = 0; i < n; ++i) {
 			workers.emplace_back(&ThreadPool::worker_loop, this);
 		}
 	}
@@ -259,17 +255,18 @@ private:
 	queue<unique_ptr<my::packaged_task<void()>>> tasks;
 };
 
+string task1(string &&);
+
 int main() {
 	ThreadPool thread_pool;
 
-	string task1(string &&);
 	auto task2 = [](string &&s) -> string {
 		this_thread::sleep_for(1ms);
-		return s + " finshed";
+		return s + " finished";
 	};
 
 	mt19937 rng(random_device {}());
-	uniform_int_distribution<int> dist(0, INT_MAX);
+	uniform_int_distribution<int> dist(0, numeric_limits<int>::max());
 
 	vector<future<string>> result_futures1;
 	for(int i = 0; i < 100; ++i) {
@@ -297,7 +294,7 @@ int main() {
 }
 
 string task1(string &&s) {
-	// 最长子数组作为示例
+	// 最长回文子串作为示例
 	int n = static_cast<int>(s.size());
 	if(n == 0) return "";
 

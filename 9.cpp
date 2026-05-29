@@ -4,6 +4,7 @@
 #include <format>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <random>
@@ -86,6 +87,26 @@ public:
 		}
 	}
 
+	auto shutdown_now() {
+		if(stop_flag.exchange(true)) {
+			return decltype(tasks) {};
+		}
+		decltype(tasks) remaining_tasks;
+		{
+			lock_guard<mutex> lk(mtx);
+			// 立即停止时，把尚未被 worker 取走的任务整体移交给调用者。
+			swap(remaining_tasks, tasks);
+		}
+		cv_not_full.notify_all();
+		cv_not_empty.notify_all();
+		for(auto &worker : workers) {
+			if(worker.joinable()) {
+				worker.join();
+			}
+		}
+		return remaining_tasks;
+	}
+
 private:
 	void worker_loop() {
 		while(true) {
@@ -118,6 +139,8 @@ private:
 	atomic<bool> stop_flag = false;
 };
 
+string longestPalindrome(const string &);
+
 int main() {
 	constexpr int task_count = 10000;
 
@@ -126,10 +149,8 @@ int main() {
 	vector<future<string>> result_futures;
 	result_futures.reserve(task_count);
 
-	string longestPalindrome(const string &);
-
 	mt19937 rng(random_device {}());
-	uniform_int_distribution<int> dist(0, INT_MAX);
+	uniform_int_distribution<int> dist(0, numeric_limits<int>::max());
 
 	for(int i = 0; i < task_count; ++i) {
 		string input = format("{}{}{}{}", dist(rng), dist(rng), dist(rng), dist(rng));
@@ -143,7 +164,7 @@ int main() {
 		cout << format("[result] task {} -> {}", i, result_futures[i].get()) << endl;
 	}
 
-	thread_pool.shutdown();
+	thread_pool.shutdown(); // 析构函数已经会调用 shutdown()，这里显式调用是多余的。
 
 	return 0;
 }

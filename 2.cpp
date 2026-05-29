@@ -1,4 +1,3 @@
-#include <atomic>
 #include <chrono>
 #include <iostream>
 #include <mutex>
@@ -8,7 +7,7 @@
 
 // 通用互斥锁管理（RAII）
 /*
-注意：C++中临时对象（未命名的变量）的生命周期截止到完整表达式结束！！而不是和命名变量一样到作用域结束
+注意：C++中临时对象（未命名的变量）的生命周期截止到完整表达式结束！！！而不是和命名变量一样到作用域结束
 
 lock_guard  实现严格基于作用域的互斥体所有权包装器 (类模板)
     构造函数：
@@ -98,7 +97,7 @@ void foo_lock_guard(int &a, mutex &mtx) {
 void foo_bad(int &a, mutex &mtx) {
 	lock_guard<mutex> {mtx};
 	// ignoring return value of 'std::lock_guard<_Mutex>::lock_guard(mutex_type&) [with _Mutex = std::mutex; mutex_type = std::mutex]', declared with attribute 'nodiscard' [-Wunused-result]gcc
-	// Wring 的意思是 这个对象不该被忽略。因为：忽略几乎一定写错了。
+	// Wrong 的意思是 这个对象不该被忽略。因为：忽略几乎一定写错了。
 	// 注意：C++中临时对象（未命名的变量）的生命周期截止到完整表达式结束，因此后面都是无锁运行
 	/*  这里写lock_guard<mutex> (mtx); 会直接无法通过编译，因为declaration parsing preference
         也就是：先尝试按声明解析，如果能成立：就当声明。不是表达式。
@@ -214,8 +213,8 @@ int main() {
 			// 释放不解锁，但是没有所有权，且指针置0
 			try {
 				ul.lock();
-			} catch(exception &e) {
-				cout << "对于_M_device为nullptr的ul调用lock会抛出异常" << endl;
+			} catch(const exception &e) {
+				cout << "对于_M_device为nullptr的ul调用lock会抛出异常" << e.what() << endl;
 			}
 			mtx.unlock();
 		}

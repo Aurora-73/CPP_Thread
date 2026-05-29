@@ -177,7 +177,7 @@ int main() {
 			string name;
 
 			functor() = delete;
-			functor(string &&_name) : name(_name) { }
+			functor(string &&name) : name(std::move(name)) { }
 
 			void operator()(int a) {
 				mtx.lock();
@@ -192,7 +192,7 @@ int main() {
 			}
 		};
 
-		auto fu = functor("fu");
+		functor fu("fu");
 		jthread t3(std::ref(fu), 3);                           // 调用 operator()
 		jthread t4(functor::operator(), &fu, 4);               // 调用 operator()
 		jthread t6(functor::number_function, &fu, 5);          // 调用成员函数
@@ -282,7 +282,7 @@ int main() {
 
 	{
 		cout << "main thread sleep for 100ms" << endl;
-		this_thread::sleep_for(chrono::milliseconds(100));
+		this_thread::sleep_for(100ms);
 		cout << "main thread sleep for another 100ms" << endl;
 		this_thread::sleep_for(100ms);
 	} // 阻塞

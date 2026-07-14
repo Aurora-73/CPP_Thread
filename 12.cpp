@@ -1,4 +1,25 @@
 
+// 对比项目中的无锁数据结构：
+//
+// 项目 concurrent/day17~18 实现了三种栈 + 一种队列：
+//   1. lock_free_stack     — 原始指针 + 延迟删除（to_be_deleted 链表）
+//   2. hazard_pointer_stack — Hazard Pointer 全局数组保护
+//   3. ref_count_stack      — split reference count（外部+内部计数）
+//   4. lock_free_queue      — Michael-Scott 队列，原始指针 + split reference count
+//   5. CircularQueSync      — MPSC 有界环形队列，三原子变量（head/tail/tail_update）
+//
+// 你的实现用 C++20 atomic<shared_ptr> 统一解决了 ABA + 内存回收，代码量少一个数量级。
+// 但有两个需要注意的点：
+//
+// 1. atomic<shared_ptr> 在 libstdc++ 中内部用 mutex 实现，不是真正 lock-free。
+//    项目里的原始指针版本才是真正的 lock-free，适合面试讨论底层原理。
+//
+// 2. LockFreeStack::pop() 存在数据竞争：CAS 成功后访问 old_head->data 可能读到
+//    已被其他线程 move 走的值。下面已修复。
+//
+// 3. SPSCRingQueue::size() 不保证原子读取（head 和 tail 分别 load，中间可能被更新），
+//    用于精确计数时需注意。对于 "是否为空/满" 的判断足够了。
+
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -39,9 +60,16 @@ public:
 
 	optional<T> pop() {
 		shared_ptr<Node> old_head = head.load();
-		while(old_head && !head.compare_exchange_weak(old_head, old_head->next));
-		if(!old_head) return nullopt;
-		return std::move(old_head->data);
+		while(old_head) {
+			// BUG FIX: 必须在 CAS 之前拷贝 data。
+			// CAS 成功后 old_head 不再受栈保护，其他线程可能已经 move 走了 data。
+			T data_copy = old_head->data;
+			if(head.compare_exchange_weak(old_head, old_head->next)) {
+				return std::move(data_copy);
+			}
+			// CAS 失败时 old_head 已被自动更新为最新值，重试
+		}
+		return nullopt;
 	}
 
 	// 快照判空

@@ -1,0 +1,32 @@
+{
+	"My Default CPP Template": {
+	  "prefix": "mycpp",
+	  "body": [
+		"#include <atomic>",
+		"#include <condition_variable>",
+		"#include <iostream>",
+		"#include <mutex>",
+		"#include <thread>",
+		"",
+		"//",
+		"/*  */",
+		"",
+		"using namespace std;",
+		"",
+		"void pause() {",
+		"\tcout << \"Press Enter to continue...\" << endl;",
+		"\tcin.get();",
+		"}",
+		"int main() {",
+		"\t{}",
+		"",
+		"\tpause();",
+		"",
+		"\t{}",
+		"",
+		"\treturn 0;",
+		"}"
+	  ],
+	  "description": "Default template for my C++ files"
+	}
+}

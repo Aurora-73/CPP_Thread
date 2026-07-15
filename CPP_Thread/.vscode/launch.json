@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "C++ Debug",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${fileDirname}\\${fileBasenameNoExtension}.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "D:/mingw64/bin/gdb.exe",
+      "preLaunchTask": "C++ Build",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "设置非停止模式",
+          "text": "set non-stop off",
+          "ignoreFailures": true
+        },
+        {
+          "description": "关闭分页",
+          "text": "set pagination off",
+          "ignoreFailures": true
+        },
+        {
+          "text": "skip -gfi D:/mingw64/lib/gcc/x86_64-w64-mingw32/15.1.0/include/c++/**"
+        },
+        {
+          "text": "skip -gfi D:/mingw64/lib/gcc/x86_64-w64-mingw32/15.1.0/include/c++/bits/*"
+        }
+      ]
+    }
+  ]
+}

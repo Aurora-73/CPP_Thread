@@ -1,0 +1,53 @@
+// .vscode/tasks.json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "C++ Clean",
+      "type": "shell",
+      "command": "if exist \"${fileDirname}\\${fileBasenameNoExtension}.exe\" del \"${fileDirname}\\${fileBasenameNoExtension}.exe\"",
+      "options": {
+        "shell": {
+          "executable": "cmd.exe",
+          "args": [
+            "/d",
+            "/c"
+          ]
+        }
+      },
+      "problemMatcher": [],
+      "group": "none"
+    },
+    {
+      "label": "C++ Build",
+      "type": "shell",
+      // 这里改成你安装目录下的 g++.exe
+      "command": "D:\\mingw64\\bin\\g++.exe",
+      "args": [
+        "-g",
+        "-O0",
+        "-Wall",
+        // "-Werror",
+        "-std=c++23",
+        "${file}",
+        // 输出也用反斜杠
+        "-o",
+        "${fileDirname}\\\\${fileBasenameNoExtension}.exe",
+        "-D_GLIBCXX_DEBUG",
+        "-pthread",
+        "-latomic"
+      ],
+      "dependsOn": "C++ Clean",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}" // 可选：保证工作目录是项目根
+      }
+    }
+  ]
+}
